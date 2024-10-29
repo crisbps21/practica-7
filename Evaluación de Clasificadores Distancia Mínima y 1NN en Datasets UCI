@@ -1,0 +1,118 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split, StratifiedKFold, LeaveOneOut
+from sklearn.metrics import accuracy_score, confusion_matrix
+from scipy.spatial import distance
+
+# Función para cargar datasets desde UCI
+def cargar_datasets():
+    datasets_urls = [
+        "https://archive.ics.uci.edu/ml/machine-learning-databases/iris/iris.data",
+        "https://archive.ics.uci.edu/ml/machine-learning-databases/wine/wine.data",
+        "https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/wdbc.data"
+    ]
+    nombres_columnas = [
+        ['sepal_length', 'sepal_width', 'petal_length', 'petal_width', 'class'],
+        ['class', 'alcohol', 'malic_acid', 'ash', 'alcalinity', 'magnesium', 'total_phenols', 'flavanoids', 'nonflavanoid_phenols', 'proanthocyanins', 'color_intensity', 'hue', 'od280/od315', 'proline'],
+        ['id', 'diagnosis'] + [f'feature_{i}' for i in range(1, 31)]
+    ]
+    datasets = []
+    for url, nombres in zip(datasets_urls, nombres_columnas):
+        df = pd.read_csv(url, header=None, names=nombres)
+        if 'id' in df.columns:
+            df.drop('id', axis=1, inplace=True)  # Eliminar columna de ID si existe
+        datasets.append(df)
+    return datasets
+
+# PARTE I: Clasificador de Distancia Mínima
+def clasificador_distancia_minima(X_train, y_train, X_test):
+    X_train = X_train.astype(float)  # Convertir a float si no lo es
+    centroides = {clase: np.mean(X_train[y_train == clase], axis=0) for clase in np.unique(y_train)}
+    predicciones = []
+    for x in X_test:
+        distancias = {clase: distance.euclidean(x, centroide) for clase, centroide in centroides.items()}
+        predicciones.append(min(distancias, key=distancias.get))
+    return np.array(predicciones)
+
+# PARTE II: Clasificador 1NN
+def clasificador_1nn(X_train, y_train, X_test):
+    X_train = X_train.astype(float)
+    predicciones = []
+    for x in X_test:
+        distancias = [distance.euclidean(x, x_train) for x_train in X_train]
+        idx_vecino = np.argmin(distancias)
+        predicciones.append(y_train[idx_vecino])
+    return np.array(predicciones)
+
+# Función para realizar la validación y calcular métricas
+def validar_clasificador(X, y, clasificador, metodo):
+    etiquetas = np.unique(y)  # Obtener las etiquetas únicas del dataset
+    unique, counts = np.unique(y, return_counts=True)
+
+    if metodo == "holdout":
+        if np.min(counts) < 2:
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, stratify=None)
+        else:
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, stratify=y)
+        
+        y_pred = clasificador(X_train, y_train, X_test)
+        acc = accuracy_score(y_test, y_pred)
+        cm = confusion_matrix(y_test, y_pred, labels=etiquetas)
+    
+    elif metodo == "kfold":
+        min_class_size = np.min(counts)
+        n_splits = max(2, min(10, min_class_size))
+        skf = StratifiedKFold(n_splits=n_splits)
+        acc_scores = []
+        cms = []
+        for train_index, test_index in skf.split(X, y):
+            X_train, X_test = X[train_index], X[test_index]
+            y_train, y_test = y[train_index], y[test_index]
+            y_pred = clasificador(X_train, y_train, X_test)
+            acc_scores.append(accuracy_score(y_test, y_pred))
+            cms.append(confusion_matrix(y_test, y_pred, labels=etiquetas))
+        acc = np.mean(acc_scores)
+        cm = np.sum(cms, axis=0)
+    
+    elif metodo == "loo":
+        loo = LeaveOneOut()
+        acc_scores = []
+        cms = []
+        for train_index, test_index in loo.split(X):
+            X_train, X_test = X[train_index], X[test_index]
+            y_train, y_test = y[train_index], y[test_index]
+            y_pred = clasificador(X_train, y_train, X_test)
+            acc_scores.append(accuracy_score(y_test, y_pred))
+            cms.append(confusion_matrix(y_test, y_pred, labels=etiquetas))
+        acc = np.mean(acc_scores)
+        cm = np.sum(cms, axis=0)
+    
+    return acc, cm
+
+# Ejecución
+datasets = cargar_datasets()
+clasificadores = {
+    "Distancia Mínima (Parte I)": clasificador_distancia_minima,
+    "1NN (Parte II)": clasificador_1nn
+}
+metodos = ["holdout", "kfold", "loo"]
+
+for i, dataset in enumerate(datasets):
+    # Separar características y etiquetas dependiendo del dataset
+    if i == 0:  # Iris dataset
+        X = dataset.iloc[:, :-1].values  # Características
+        y = dataset.iloc[:, -1].values   # Etiquetas
+    else:  # Wine y Breast Cancer
+        X = dataset.iloc[:, 1:].values  # Características
+        y = dataset.iloc[:, 0].values   # Etiquetas
+    
+    print(f"\nDataset {i+1}")
+    
+    for nombre_clasificador, clasificador in clasificadores.items():
+        print(f"\nClasificador: {nombre_clasificador}")
+        
+        for metodo in metodos:
+            acc, cm = validar_clasificador(X, y, clasificador, metodo)
+            print(f"Validación: {metodo}")
+            print(f"Accuracy: {acc}")
+            print("Matriz de Confusión:\n", cm)
